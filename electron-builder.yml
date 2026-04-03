@@ -7,7 +7,7 @@ asar: true
 files:
   - dist/**/*
   - dist-electron/main.js
-  - dist-electron/preload.js
+  - dist-electron/preload.*
   - node_modules/**/*
   - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
   - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
@@ -18,7 +18,7 @@ extraMetadata:
   main: dist-electron/main.js
 
 win:
-  icon: public/logo.ico
+  icon: 123456.png
   target:
     - target: nsis
       arch:

@@ -128,7 +128,7 @@ interface UserRow {
 const DEFAULT_OWNER: AppUser = {
   id: 'owner-1',
   username: 'admin',
-  password: 'admin123',
+  password: '', // Set on first run - see getOrCreateDefaultPassword below
   fullName: 'صاحب النظام',
   role: 'owner',
   permissions: [...ALL_PERMISSIONS],
@@ -137,8 +137,38 @@ const DEFAULT_OWNER: AppUser = {
   mustChangePassword: true,
 };
 
+function getOrCreateDefaultPassword(): string {
+  const key = STORAGE_KEYS.DEFAULT_OWNER_PASSWORD;
+  const stored = localStorage.getItem(key);
+  if (stored) return stored;
+  
+  // Generate secure random password
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  const password = Array.from(arr, b => chars[b % chars.length]).join('');
+  
+  localStorage.setItem(key, password);
+  return password;
+}
+
 let usersCache: AppUser[] | null = null;
 let recoveryCodeCache: string | null = null;
+
+// Apply default password if empty (first run migration)
+const ensureDefaultOwner = () => {
+  const users = getUsers();
+  const owner = users.find(u => u.role === 'owner');
+  if (owner && !owner.password) {
+    const defaultPassword = getOrCreateDefaultPassword();
+    // Legacy migration: set password to hashed default
+    const salt = generateSalt();
+    hashPassword(defaultPassword, salt).then(hash => {
+      saveUsers(users.map(u => u.id === owner.id ? { ...u, password: hash, salt } : u));
+    });
+  }
+};
+ensureDefaultOwner();
 
 function parsePermissions(value: unknown, role: UserRole): Permission[] {
   const fallback = role === 'owner' ? [...ALL_PERMISSIONS] : [];

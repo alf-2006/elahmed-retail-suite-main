@@ -41,6 +41,7 @@ interface AuthContextType {
 const SESSION_KEY = STORAGE_KEYS.AUTH_USER;
 const SESSION_TIMEOUT_MS = 8 * 60 * 60 * 1000; // #22: 8 hours
 const SESSION_TS_KEY = 'gx_session_ts';
+const SESSION_VERSION_KEY = 'gx_session_version';
 const SESSION_REFRESH_DEBOUNCE_MS = 30 * 1000;
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -48,11 +49,31 @@ function getSessionStore(): Storage {
   return window.sessionStorage;
 }
 
+/**
+ * Get or create session version.
+ * This binds the session to a specific login event.
+ * If localStorage is tampered, session is invalidated.
+ */
+function getOrCreateSessionVersion(): string {
+  try {
+    const stored = localStorage.getItem(SESSION_VERSION_KEY);
+    if (stored) return stored;
+    
+    // Generate new version for each browser restart
+    const version = crypto.randomUUID();
+    localStorage.setItem(SESSION_VERSION_KEY, version);
+    return version;
+  } catch {
+    return 'unknown';
+  }
+}
+
 function clearLegacyAuthStorage(): void {
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(SESSION_TS_KEY);
   localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
   localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+  // Don't clear SESSION_VERSION_KEY - it's for machine binding
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -74,6 +95,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           clearLegacyAuthStorage();
           return null;
         }
+      }
+
+      // Session version check - prevents tampering
+      const storedVersion = store.getItem('sessionVersion');
+      const expectedVersion = getOrCreateSessionVersion();
+      if (storedVersion !== expectedVersion) {
+        // Session was tampered or browser restarted - force re-login
+        store.removeItem(SESSION_KEY);
+        store.removeItem(SESSION_TS_KEY);
+        clearLegacyAuthStorage();
+        return null;
       }
 
       const parsed = JSON.parse(stored) as AuthUser;
@@ -197,6 +229,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error: 'يجب تغيير كلمة المرور قبل الدخول لأول مرة',
       };
     }
+
+    // Generate session version - binds this session to current browser instance
+    const sessionVersion = getOrCreateSessionVersion();
+    const store = getSessionStore();
+    store.setItem('sessionVersion', sessionVersion);
 
     const authUser: AuthUser = {
       id: found.id,

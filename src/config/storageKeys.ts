@@ -86,6 +86,7 @@ export const STORAGE_KEYS = {
   PASSWORDS_MIGRATED: 'gx_passwords_migrated_v1',
   MIGRATION_BATCHES_DONE: 'gx_migration_batches_done',
   MIGRATION_USED_MERGE_DONE: 'gx_migration_used_merge_done',
+  DEFAULT_OWNER_PASSWORD: 'gx_default_owner_password',
 } as const;
 
 export type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];

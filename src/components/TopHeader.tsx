@@ -50,6 +50,7 @@ const ROUTE_TITLES: Record<string, string> = {
     '/purchase-invoices': 'فواتير الشراء',
     '/reports': 'التقارير والإحصاءات',
     '/diagnostics': 'تشخيص النظام',
+    '/partners': 'الشركاء والموزعون',
 };
 
 ROUTE_TITLES['/used-inventory'] = 'الأجهزة المستعملة';

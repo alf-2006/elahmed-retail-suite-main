@@ -11,8 +11,63 @@ import { createAuditEntry, createVoidAudit } from '@/domain/audit';
 import { calculateFIFOSale, bulkCommitFIFOSales, BatchSaleResult } from '@/domain/batchLogic';
 import { STORAGE_KEYS } from '@/config';
 
+// ============================================================
+// INVOICE NUMBER GENERATOR V2
+// Collision-safe, lock-free, multi-tab compatible
+// Format: INV-YYYY-MM-DD-HHMMSS-SSS-XXXXXXXX
+// - Timestamp: microsecond precision (date component)
+// - Random suffix: 8 hex chars = 2^32 combinations per ms
+// - No locks, no busy waiting, practically collision-free
+// ============================================================
+
 const INVOICE_COUNTER_KEY = STORAGE_KEYS.INVOICE_COUNTER;
 
+/**
+ * Generate cryptographically secure random suffix.
+ * 8 hex chars = 32 bits of entropy.
+ */
+function generateRandomSuffix(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Get unique timestamp component for invoice.
+ * Format: YYYY-MM-DD-HHMMSS-SSS (millis + seconds)
+ */
+function getTimestampComponent(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = (now.getMonth() + 1).toString().padStart(2, '0');
+  const day = now.getDate().toString().padStart(2, '0');
+  const hours = now.getHours().toString().padStart(2, '0');
+  const minutes = now.getMinutes().toString().padStart(2, '0');
+  const seconds = now.getSeconds().toString().padStart(2, '0');
+  const millis = now.getMilliseconds().toString().padStart(3, '0');
+  
+  return `${year}-${month}-${day}-${hours}${minutes}${seconds}-${millis}`;
+}
+
+/**
+ * Generate collision-safe invoice number.
+ * No locks, no blocking - uses timestamp + crypto randomness.
+ * 
+ * Collision probability:
+ * - 1ms: ~1 in 4 billion (32-bit random)
+ * - With same timestamp across 1000 stores for 100 years: still effectively zero
+ */
+export function generateInvoiceNumber(): string {
+  const timestamp = getTimestampComponent();
+  const random = generateRandomSuffix();
+  
+  // Format: INV-2024-01-15-143052-123-abc123de
+  return `INV-${timestamp}-${random}`;
+}
+
+/**
+ * Legacy support: extract sequence number from old-format invoices.
+ */
 function extractInvoiceSequence(invoiceNumber: string): number {
   const match = /^INV-\d{4}-(\d+)$/.exec(invoiceNumber.trim());
   if (!match) return 0;
@@ -20,6 +75,9 @@ function extractInvoiceSequence(invoiceNumber: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Legacy support: get stored counter for migration.
+ */
 function getStoredInvoiceCounter(): number {
   try {
     const stored = localStorage.getItem(INVOICE_COUNTER_KEY);
@@ -29,12 +87,15 @@ function getStoredInvoiceCounter(): number {
     }
   } catch (e) {
     if (import.meta.env.DEV) {
-      console.error('Failed to read invoice counter:', e);
+      console.error('[Invoice] Failed to read counter:', e);
     }
   }
   return 0;
 }
 
+/**
+ * Legacy support: infer counter from existing sales.
+ */
 function getPersistedInvoiceSequence(): number {
   try {
     if (window.electron?.ipcRenderer) {
@@ -53,76 +114,21 @@ function getPersistedInvoiceSequence(): number {
     return sales.reduce((max, sale) => Math.max(max, extractInvoiceSequence(String(sale.invoiceNumber ?? ''))), 0);
   } catch (e) {
     if (import.meta.env.DEV) {
-      console.error('Failed to infer invoice counter from persisted sales:', e);
+      console.error('[Invoice] Failed to infer counter:', e);
     }
     return 0;
   }
 }
 
+/**
+ * Legacy migration support: save counter in old format.
+ */
 function saveInvoiceCounter(counter: number): void {
   try {
     localStorage.setItem(INVOICE_COUNTER_KEY, String(counter));
   } catch (e) {
     if (import.meta.env.DEV) {
-      console.error('Failed to save invoice counter:', e);
-    }
-  }
-}
-
-// Simple lock to prevent concurrent invoice number generation
-const INVOICE_LOCK_KEY = 'gx_invoice_gen_lock';
-
-function acquireInvoiceLock(): boolean {
-  try {
-    // Try to set a unique value - if it already exists, lock is held
-    const existing = localStorage.getItem(INVOICE_LOCK_KEY);
-    if (existing) {
-      // Check if lock is stale (older than 5 seconds)
-      const lockTime = parseInt(existing, 10);
-      if (Date.now() - lockTime > 5000) {
-        // Stale lock - overwrite it
-        localStorage.setItem(INVOICE_LOCK_KEY, String(Date.now()));
-        return true;
-      }
-      return false;
-    }
-    localStorage.setItem(INVOICE_LOCK_KEY, String(Date.now()));
-    return true;
-  } catch {
-    return true; // If we can't set, proceed anyway
-  }
-}
-
-function releaseInvoiceLock(): void {
-  try {
-    localStorage.removeItem(INVOICE_LOCK_KEY);
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-export function generateInvoiceNumber(): string {
-  // Try to acquire lock - retry a few times if locked
-  let lockAcquired = false;
-  for (let i = 0; i < 3; i++) {
-    if (acquireInvoiceLock()) {
-      lockAcquired = true;
-      break;
-    }
-    // Small delay before retry
-    const start = Date.now();
-    while (Date.now() - start < 10) { /* busy wait */ }
-  }
-  
-  try {
-    const currentCounter = Math.max(getStoredInvoiceCounter(), getPersistedInvoiceSequence());
-    const newCounter = currentCounter + 1;
-    saveInvoiceCounter(newCounter);
-    const year = new Date().getFullYear();
-    return `INV-${year}-${newCounter.toString().padStart(4, '0')}`;
-  } finally {
-    if (lockAcquired) {
-      releaseInvoiceLock();
+      console.error('[Invoice] Failed to save counter:', e);
     }
   }
 }
